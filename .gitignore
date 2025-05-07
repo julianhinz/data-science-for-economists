@@ -1,3 +1,4 @@
 # files
 *.txt
 .DS_Store
+/08-event-data/temp

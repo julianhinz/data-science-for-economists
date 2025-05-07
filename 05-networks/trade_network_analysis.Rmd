@@ -1,0 +1,251 @@
+
+---
+title: "Trade Networks: Metrics and Null Models"
+author: "Irene Iodice"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+required_packages <- c("data.table", "igraph", "ggplot2", "dplyr", "R.utils")
+
+# Install missing packages
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) install.packages(new_packages)
+
+# Load all packages
+lapply(required_packages, library, character.only = TRUE)
+
+# R Markdown chunk options
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load and Clean BACI Data
+
+```{r}
+data_path <- "~/work/Teaching/data-science-for-economists/05-networks/data/"
+
+file1 <- "BACI_HS07_Y2017_V202001_p1.csv.gz"
+file2 <- "BACI_HS07_Y2017_V202001_p2.csv.gz"
+
+conversion <- fread(paste0(data_path, "country_codes_cepii_V2021.csv.gz"))[, .(isocode3 = iso_3digit_alpha, country_code)]
+
+data_baci <- rbind(fread(paste0(data_path, file1)), fread(paste0(data_path, file2)))
+data_baci <- data_baci[!grepl("^98", k) & !grepl("^99", k), .(t, i, j, k, v)]
+
+data_baci <- data_baci[conversion, on = .(i = country_code), nomatch = 0][conversion, on = .(j = country_code), nomatch = 0]
+setnames(data_baci, old = c("isocode3", "i.isocode3"), new = c("exp", "imp"))
+
+data_baci[, c("i", "j") := NULL]
+setnames(data_baci, old = c("t", "k", "v", "exp", "imp"), new = c("year", "product_code", "trade_value", "exp", "imp"))
+
+data_baci <- data_baci[trade_value > 100]
+
+head(data_baci)
+```
+
+## 2. Build the Trade Network (Unweighted)
+
+```{r}
+# Directed trade graph (no weights)
+trade_network <- data_baci %>%
+  select(exp, imp) %>%
+  distinct() %>%
+  graph_from_data_frame(directed = TRUE)
+```
+
+**Questions:**
+- What kind of relationships do nodes and edges represent in this graph?
+- Why should this network be directed?
+
+## 3. Visualize the Network
+
+```{r, fig.width=11, fig.height=11}
+
+trade_network <- graph_from_data_frame(d = unique(data_baci[, .(exp, imp)]), directed = TRUE)
+
+plot(trade_network, vertex.size=0.01, vertex.label.cex=0.7, edge.arrow.size=0.1)
+```
+
+**Questions:**
+- Can you visually identify any hubs?
+- Is the network sparse or dense?
+
+## 4. Compute Degree Centrality
+
+```{r}
+deg_in <- degree(trade_network, mode = "in")
+deg_out <- degree(trade_network, mode = "out")
+
+deg_in_df <- data.frame(country = names(deg_in), degree_in = deg_in)
+deg_out_df <- data.frame(country = names(deg_out), degree_out = deg_out)
+
+head(arrange(deg_in_df, -degree_in))  # Top importers
+head(arrange(deg_out_df, -degree_out))  # Top exporters
+```
+
+**Questions:**
+- Who are the top exporters and importers by number of trade partners?
+- Do these match your expectations?
+
+## 5. Plot Degree Distribution
+
+```{r}
+ggplot(deg_out_df, aes(x = degree_out)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 15, fill = "steelblue", color = "white") +
+  labs(title = "Out-Degree Distribution", x = "Out-Degree", y = "Density") +
+  theme_minimal()
+```
+
+**Questions:**
+- What is the shape of the distribution? Is it skewed?
+- Are most countries trading with many or few partners?
+
+## 6. Closeness Centrality
+
+```{r}
+closeness_in <- data.frame(
+  country = names(closeness(trade_network, mode = "in")),
+  centrality_in = closeness(trade_network, mode = "in")
+)
+
+closeness_out <- data.frame(
+  country = names(closeness(trade_network, mode = "out")),
+  centrality_out = closeness(trade_network, mode = "out")
+)
+
+head(arrange(closeness_in, -centrality_in))
+head(arrange(closeness_out, -centrality_out))
+```
+
+**Questions:**
+- Who are the most "accessible" importers and exporters?
+- What does it mean to have high closeness but low degree?
+
+## 7. Betweenness Centrality
+
+```{r}
+btw_df <- data.frame(
+  country = names(betweenness(trade_network, normalized = TRUE)),
+  centrality = betweenness(trade_network, normalized = TRUE)
+)
+
+head(arrange(btw_df, -centrality))
+```
+
+**Questions:**
+- Who plays a broker or intermediary role in the trade network?
+- Are there countries with **high betweenness but low degree**?
+
+## 8. Count Nodes, Edges, and Compute Density
+
+```{r}
+n_nodes <- gorder(trade_network)
+n_edges <- gsize(trade_network)
+density <- edge_density(trade_network, loops = FALSE)
+
+n_nodes
+n_edges
+density
+```
+
+**Questions:**
+- What is the density of the trade network?
+- What does this tell us about global trade interdependence?
+
+
+### Create a Weighted Trade Network
+
+```{r}
+# Group trade flows by exporter-importer pair and sum their trade values
+weighted_edges <- data_baci %>%
+  group_by(exp, imp) %>%
+  summarise(weight = sum(trade_value, na.rm = TRUE), .groups = "drop") %>%
+  na.omit()
+
+# Create a directed graph with edge weights
+w_trade_network <- graph_from_data_frame(weighted_edges, directed = TRUE)
+```
+
+**Questions:**
+- What does assigning **weights** to edges mean in the context of trade?
+- How does weighting change the role of countries that have **few but large** trade partners?
+- Are “influential” countries by volume the same as those by number of partners?
+
+---
+
+## Weighted Closeness Centrality
+
+```{r}
+# Compute weighted in-degree centrality (i.e., total import value)
+weighted_in_degree <- data.frame(
+  country = names(strength(w_trade_network, mode = "in", weights = E(w_trade_network)$weight)),
+  in_strength = strength(w_trade_network, mode = "in", weights = E(w_trade_network)$weight)
+) %>%
+  arrange(desc(in_strength))
+
+# Show top 6 countries by import strength
+head(weighted_in_degree)
+```
+
+```{r}
+# Weighted closeness OUT: countries that can quickly reach others by trade volume
+# Compute weighted out-degree centrality (i.e., total export value)
+weighted_out_degree <- data.frame(
+  country = names(strength(w_trade_network, mode = "out", weights = E(w_trade_network)$weight)),
+  out_strength = strength(w_trade_network, mode = "out", weights = E(w_trade_network)$weight)
+) %>%
+  arrange(desc(out_strength))
+
+# Show top 6 countries by export strength
+head(weighted_out_degree)
+```
+
+**Questions:**
+- Who are the most central **importers** by weighted degree centrality? Why might they be important?
+- Who are the most central **exporters** by weighted degree centrality? How do they compare to the unweighted results?
+- Are small, highly connected economies still central when we account for trade volume?
+- What kind of country has high **unweighted** closeness but low **weighted** closeness—and vice versa?
+
+**Interpretation:**  
+Why might a country have high degree but low closeness in the weighted network?
+
+## Null Model: Erdős-Rényi
+
+```{r}
+set.seed(1234)
+# Compute observed mean path length
+obs_path_length <- mean_distance(trade_network, directed = TRUE)
+
+# Simulate 100 Erdős-Rényi null graphs with same size and density
+null_path_lengths <- replicate(100, {
+  g_null <- sample_gnp(n = gorder(trade_network), 
+                       p = edge_density(trade_network), 
+                       directed = TRUE)
+  mean_distance(g_null, directed = TRUE)
+})
+
+# Compute p-value
+p_val <- mean(null_path_lengths <= obs_path_length)
+
+# Plot the null distribution with observed value
+null_df <- data.frame(path_length = null_path_lengths)
+
+ggplot(null_df, aes(x = path_length)) +
+  geom_histogram(binwidth = 0.001, fill = "lightblue", color = "white") +
+  geom_vline(xintercept = obs_path_length, color = "red", linetype = "dashed") +
+  annotate("text", x = obs_path_length, y = 5, label = paste("Observed =", round(obs_path_length, 2)), hjust = -0.1, color = "red") +
+  ggtitle("Null Model vs Observed Path Length") +
+  xlab("Average Shortest Path Length") +
+  ylab("Frequency") +
+  theme_minimal()
+
+# Display p-value
+p_val
+
+```
+**Interpretation:**  
+What a longer than expected Average Short Path means?
+
+<!-- Trade connections are less efficient than you'd expect by chance. Countries might be geographically distant, or trade might be fragmented due to: Tariffs, trade frictions, or political barriers, Regional clustering (e.g., strong intra-EU trade but weak cross-regional), Supply chains skipping many countries, rather than spanning broadly -->
+
+
