@@ -5,6 +5,30 @@ author: "Irene Iodice"
 output: html_document
 ---
 
+## Class Overview
+
+Welcome to today's session: **Trade Networks – Metrics and Null Models**
+
+In this class, we'll explore how to represent and analyze international trade as a **network**, using real trade data from CEPII's BACI dataset. We'll work through the following steps:
+
+1. **Data Preparation** – Load and clean BACI trade data for 2017.
+2. **Building the Trade Network** – Construct a directed network where nodes are countries and edges represent trade relationships.
+3. **Visualizing the Network** – Examine the global trade structure: identify hubs, assess sparsity, and connectivity.
+4. **Network Metrics** – Compute and interpret centrality measures:
+   - **Degree centrality**: number of trade partners
+   - **Closeness centrality**: distance to other countries in the network
+   - **Betweenness centrality**: intermediary or broker roles
+5. **Weighted Network Analysis** – Build a weighted network using trade values and reassess centrality.
+6. **Null Model Comparison** – Compare the observed network to random graphs (Erdős–Rényi) to understand whether the trade world is "flat". In other words, does trade flow freely and evenly across countries—as it would in a random network—or are there structural barriers and hubs that make global trade more uneven?
+
+### Key Questions
+- What makes a country central in global trade?
+- How do different metrics reflect economic influence?
+- What distinguishes the real trade network from a random one?
+
+You can download the complete data at [this link here](https://www.cepii.fr/CEPII/en/bdd_modele/bdd_modele_item.asp?id=37). 
+https://www.cepii.fr/DATA_DOWNLOAD/baci/doc/DescriptionBACI.html
+
 ```{r setup, include=FALSE}
 required_packages <- c("data.table", "igraph", "ggplot2", "dplyr", "R.utils")
 
@@ -18,6 +42,7 @@ lapply(required_packages, library, character.only = TRUE)
 # R Markdown chunk options
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
 
 ## Load and Clean BACI Data
 
@@ -60,9 +85,6 @@ trade_network <- data_baci %>%
 ## 3. Visualize the Network
 
 ```{r, fig.width=11, fig.height=11}
-
-trade_network <- graph_from_data_frame(d = unique(data_baci[, .(exp, imp)]), directed = TRUE)
-
 plot(trade_network, vertex.size=0.01, vertex.label.cex=0.7, edge.arrow.size=0.1)
 ```
 
@@ -90,9 +112,9 @@ head(arrange(deg_out_df, -degree_out))  # Top exporters
 ## 5. Plot Degree Distribution
 
 ```{r}
-ggplot(deg_out_df, aes(x = degree_out)) +
-  geom_histogram(aes(y = after_stat(density)), bins = 15, fill = "steelblue", color = "white") +
-  labs(title = "Out-Degree Distribution", x = "Out-Degree", y = "Density") +
+ggplot(deg_in_df, aes(x = degree_in)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, fill = "steelblue", color = "white") +
+  labs(title = "IN-Degree Distribution", x = "Out-Degree", y = "Density") +
   theme_minimal()
 ```
 
@@ -142,9 +164,10 @@ head(arrange(btw_df, -centrality))
 n_nodes <- gorder(trade_network)
 n_edges <- gsize(trade_network)
 density <- edge_density(trade_network, loops = FALSE)
-
+# 
 n_nodes
-n_edges
+n_edges 
+# density = (n_edges)/(n_nodes*(n_nodes-1)) - edges here are repeated by all combinations when imp-exp swap order!
 density
 ```
 
