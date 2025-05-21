@@ -1,0 +1,133 @@
+---
+title: "Satellite Imagery — DSfE 2025"
+author: "Irene Iodice"
+date: "May 2025"
+output: html_document
+---
+
+This script demonstrates how to work with raster (satellite) and vector (shapefile) spatial data in R. It covers:
+
+- Loading and visualizing elevation and nightlight data
+- Stacking and aggregating raster images across time
+- Comparing changes in light intensity over time
+- Cropping and masking rasters using vector boundaries (e.g., Ukraine's border)
+- Visualizing and extracting raster data for further analysis
+
+
+```{r}
+# Set working directory
+setwd("~/work/Teaching/data-science-for-economists/07-satellite-imagery")
+
+# Load required packages
+if (!require("pacman")) install.packages("pacman"); library("pacman")
+p_load(terra, sf, stringr, data.table, ggplot2, rnaturalearth)
+p_load_current_gh("ropensci/rnaturalearthhires")
+```
+
+<!-- # What Is a Raster? Think of it like a spreadsheet laid over the Earth: each cell (pixel) holds a value (e.g., elevation, temperature, light intensity). All cells are evenly spaced. The raster has: resolution (size of each pixel), extent (geographic area it covers), CRS (coordinate reference system) -->
+
+
+```{r}
+# Load and plot an example raster (elevation)
+img <- rast(system.file("ex/elev.tif", package = "terra"))
+plot(img)
+# Which country is this?
+```
+
+
+```{r}
+# Load and plot nightlight image (A nightlight .tif file might look like a black-and-white image, but R reads it’s a 2D grid where each cell (pixel) has a numeric value representing light intensity.)
+img_nightlight <- rast("input/20210404_4x.tif")
+plot(img_nightlight)
+# Why you dont see anything? How would you get mote signal?
+```
+
+```{r}
+# Load all .tif files in folder
+list_images <- list.files("input", pattern = "*.tif", full.names = TRUE)
+length(list_images)
+images <- rast(list_images)
+
+# Filter files for May 2022 and May 2021
+list_images_may22 <- list_images[str_detect(list_images, "202205")]
+images_may22 <- rast(list_images_may22)
+
+# Calculate median raster across time for each period
+images_may22_median <- median(images_may22)
+plot(log(images_may22_median))
+```
+```{r}
+images_may21 <- rast(list_images[str_detect(list_images, "202105")])
+images_may21_median <- median(images_may21)
+plot(log(images_may21_median))
+```
+
+```{r}
+# Compute pixel-wise difference in light intensity between years
+images_may_diff <- images_may21_median - images_may22_median
+plot(log(images_may_diff))
+```
+```{r}
+images_may21_mean <- mean(images_may21)
+images_may22_mean <- mean(images_may22)
+
+
+# Extract pixel values for histogram plotting
+plot_data_may22 <- terra::values(images_may22_mean, dataframe = TRUE)
+plot_data_may21 <- terra::values(images_may21_mean, dataframe = TRUE)
+setDT(plot_data_may22)
+setDT(plot_data_may21)
+
+# Compare pixel intensity distributions (nightlight proxy)
+ggplot() +
+  theme_minimal() +
+  geom_density(data = plot_data_may22, aes(x = mean), n = 50, color = "red") +
+  geom_density(data = plot_data_may21, aes(x = mean), n = 50, color = "blue") +
+  scale_y_log10("PDF") +
+  scale_x_continuous("Avg. nightlight intensity")
+```
+
+<!-- # --- Focused Analysis on Ukraine --- -->
+
+<!-- # In the following steps, we isolate and analyze nightlight intensity data specifically for Ukraine. -->
+<!-- # This includes: -->
+<!-- # 1. Loading Ukraine’s vector boundary (country shape) from the Natural Earth dataset. -->
+<!-- # 2. Ensuring its coordinate reference system (CRS) matches the raster data. -->
+<!-- # 3. Cropping the raster to the extent of Ukraine (keeping a rectangular area). -->
+<!-- # 4. Masking the raster to the shape of Ukraine (removing everything outside the border). -->
+<!-- # This allows us to visualize and quantify changes in light intensity specifically within Ukraine’s borders. -->
+
+ <!-- vector data (country borders) using rnaturalearth and sf packages: -->
+
+```{r}
+# Load and plot country borders
+plot(ne_countries())
+```
+```{r}
+# Extract Ukraine and convert to sf format
+shape_ukraine <- ne_countries(country = "Ukraine")
+shape_ukraine <- st_as_sf(shape_ukraine)
+plot(shape_ukraine)
+```
+
+
+```{r}
+
+# Check and align coordinate reference systems (CRS)
+st_crs(shape_ukraine)
+st_crs(images_may22_median)
+all.equal(st_crs(shape_ukraine), st_crs(images_may22_median))  # usually returns FALSE
+shape_ukraine <- st_transform(shape_ukraine, st_crs(images_may22_median))
+all.equal(st_crs(shape_ukraine), st_crs(images_may22_median))  # should now match
+
+```
+```{r}
+# Crop and mask raster to Ukraine's borders
+images_may22_median_ukraine <- crop(images_may22_median, shape_ukraine)
+plot(log(images_may22_median_ukraine))
+```
+```{r}
+images_may22_median_ukraine_masked <- mask(images_may22_median, shape_ukraine)
+plot(log(images_may22_median_ukraine_masked))
+```
+
