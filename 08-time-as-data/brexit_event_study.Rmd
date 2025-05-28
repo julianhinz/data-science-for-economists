@@ -1,0 +1,261 @@
+---
+title: "Event Study: Brexit and Trade"
+author: "Irene Iodice"
+date: "May 2025"
+output: html_document
+---
+
+## Learning Objectives
+Learning Objectives: By the end of this lab you will be able to:
+- Manipulate and summarize dates and time-series objects in R using **lubridate** and **zoo**.
+- Visualize trade flows over time and annotate policy events (e.g., Brexit) with **ggplot2**.
+- Implement event-study style difference-in-differences and gravity-type regressions with **fixest**.
+- Critically evaluate the impact of Brexit on UK exports relative to relevant counterfactuals.
+
+```{r setup, include=FALSE}
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(data.table, stringr, lubridate, countrycode, ggplot2, fixest, etable, zoo)
+```
+
+## Laboratory: Playing with Dates in R
+
+In this short exercise, we explore how to handle dates in R using `lubridate` and `zoo`.
+
+```{r}
+library(lubridate)
+library(zoo)
+
+# lubridate example
+d1 <- ymd("2020-01-01")
+d2 <- ymd("2020-12-31")
+
+# 1. Create a 60-day window around a date
+d <- ymd("2021-01-01")
+window <- d + days(-30:30)  # 61-day window centered around d
+head(window)
+window <- d + months(-2:3) 
+head(window)
+
+interval(d1, d2)
+
+# zoo example: create a monthly time series
+z <- zoo(c(100, 101, 102), order.by = as.Date(c("2020-01-01", "2020-02-01", "2020-03-01")))
+plot(z, main = "Simple Zoo Time Series")
+```
+
+## Preparing the Data
+
+```{r}
+
+EU27 <- c("DEU", "AUT", "BEL", "DNK", "FIN", "FRA", "GRC", "IRL", "ITA", "LUX", "NLD", "PRT", "ESP", "SWE",
+          "MLT", "CYP", "EST", "LTU", "LVA", "CZE", "HUN", "BGR", "ROU", "POL", "SVK", "SVN", "HRV")
+
+files <- list.files("input/monthly_hs2", full.names = TRUE)
+data <- fread(cmd = paste0("gunzip -c ", files[1]))
+View(data)
+head(data)
+```
+```{r}
+# Check the data
+View(data)
+head(data)
+data[, uniqueN(Reporter)]
+data[, uniqueN(Partner)]
+data[, uniqueN(Commodity)]
+data[, unique(`Trade Flow`)] 
+data[, .N]
+```
+
+```{r}
+# check trade zeros
+data[`Trade Flow Code` == 2, .N]
+
+# check trade zeros
+data[, uniqueN(Reporter)] * data[, uniqueN(Partner)] * data[, uniqueN(Commodity)] 
+data[`Trade Flow Code` == 2, .N] / (data[, uniqueN(Reporter)] * data[, uniqueN(Partner)] * data[, uniqueN(Commodity)])
+
+```
+```{r}
+wdir <- getwd()
+dir.create(file.path(wdir, "temp"), showWarnings = FALSE)
+
+# read all files
+files = list.files("input/monthly_hs2", full.names = T)
+
+# f = files[1]
+for (f in files) {
+    # print(f)
+
+    # load
+    data = fread(f)
+
+    # format and clean data
+    data = data[, .(date = Period,
+                    origin = Reporter,
+                    destination = Partner,
+                    hs = `Commodity Code`,
+                    flow = `Trade Flow Code`,
+                    value = `Trade Value (US$)`)]
+
+    # make dates pretty
+    data[, date := ymd(str_c(date, "01"))]
+    data[, date := date + months(1) - days(1)]
+    # str(data)
+
+    # use country codes
+    data[, origin := countryname(origin, "iso3c", warn = FALSE)]
+    data[, destination := countryname(destination, "iso3c", warn = FALSE)]
+    # countrycode("Germany", "country.name", "iso3c")
+    # countrycode("Deutschland", "country.name.de", "iso3c")
+    # countryname(c("Deutschland", "Alemania", "Allemagne", "Duitsland"), "iso3c")
+
+    # transform value from integer to numeric
+    data[, value := as.numeric(value)]
+
+    # only take obs with non-missing variable
+    data = data[complete.cases(data)]
+
+    fwrite(data,
+           "temp/monthly_1921.csv.gz",
+           compress = "gzip",
+           append = T)
+
+}
+ 
+# # alternative
+# extract_data = function (...) {}
+# map(files, ~ extract_data(.x), .progress = T)
+
+# load full dataset
+data = fread("temp/monthly_1921.csv.gz")
+data = data[flow == 2]
+gc()
+```
+
+```{r}
+# load full dataset
+data = fread("temp/monthly_1921.csv.gz")
+data = data[flow == 2]
+gc()
+data[, .N, by = origin] # greater or equal than 125
+data[, .(date, origin)] %>%
+  unique() %>%
+  .[, .N, by = .(year(date), origin)] %>%
+  .[, .(N = sum(N)), by = origin] %>% 
+  head()
+```
+ 
+```{r}
+# brexit impact
+data[, unique(hs)]
+exports_uk = data[origin == "GBR" & hs == "TOTAL", -c("origin", "hs", "flow")]
+
+check <- data[,
+  .(value_total = value[hs == "TOTAL"], 
+    value_sum = sum(value[hs != "TOTAL"])),
+  by = .(date, origin, destination, flow)
+][, match := all.equal(value_total, value_sum)]
+```
+
+
+```{r}
+# plot: aggregate over time
+plot_data = exports_uk[, .(value = sum(value)), by = date]
+
+plot=ggplot(plot_data) +
+    theme_minimal() +
+    geom_line(aes(x = date, y = value / 1000000)) +
+    geom_vline(aes(xintercept = ymd("2020-01-31")), color = "red") +
+    geom_vline(aes(xintercept = ymd("2020-12-31")), color = "red") +
+    scale_x_date(name = NULL) +
+    scale_y_continuous(name = "Total exports in mn USD",
+                       labels = scales::dollar) +
+    ggtitle(label = "Total value of UK exports",
+            subtitle = "UN Comtrade Data, 2019 – 2021")
+ggsave(plot,
+       filename = str_c(wdir, "/output/UK_exp.png"),
+       width = 20,
+       height = 20,
+       units = "cm")
+plot
+```
+
+```{r}
+# plot: compare to other countries
+plot_data = data[origin %in% c("GBR", "IRL", "ISL", "SWE"), .(value = sum(value)), by = .(date, origin)]
+plot_data[, value_norm := value / mean(value[year(date) == "2019"]), by = origin]
+```
+
+```{r}
+plot_data = data[origin %in% c("GBR", "IRL", "ISL", "SWE") & destination %in% EU27, .(value = sum(value)), by = .(date, origin)]
+
+plot_data[, value_norm := value / mean(value[year(date) == "2019"]), by = origin]
+
+plot_data[, Country := countrycode(origin, "iso3c", "country.name")]
+plot = ggplot(plot_data) +
+    theme_minimal() +
+    geom_line(aes(x = date, y = value_norm, group = Country, color = Country)) +
+    geom_vline(aes(xintercept = ymd("2020-01-31")), color = "red") +
+    geom_vline(aes(xintercept = ymd("2020-12-31")), color = "red") +
+    scale_x_date(name = NULL) +
+    scale_y_continuous(name = "Exports to EU compared to average of 2019") +
+    ggtitle(label = "Impact of Brexit",
+            subtitle = "UN Comtrade Data, 2019 – 2021")
+
+ggsave(plot,
+       filename = str_c(wdir, "/output/exp_to_EU27.png"),
+       width = 20,
+       height = 20,
+       units = "cm")
+plot
+```
+
+## Regression Analysis
+
+```{r}
+# regressions instead of eyeball econometrics:all
+  # 1. regression export value from the 4 exporters toward EU destinations on Brexit treatment
+        # Identification: use va VAriation within country and controlling for (monthly) time trends common to all 4 exporters.
+  # 2. the same as 1 but for exports towards all destinations? What do you expect? 
+  # 3. the same but including zeros and estimating via PPML
+reg_data = data[origin %in% c("GBR", "IRL", "ISL", "SWE") & destination %in% EU27, .(value = sum(value)), by = .(date, origin)]
+
+reg_data[, treatment := (origin == "GBR") * (date > ymd("2020-12-31"))]
+
+reg1 = feols(log(value) ~ treatment | date + origin, data = reg_data)
+etable(reg1)
+
+```
+```{r}
+# all countries
+reg_data = data[, .(value = sum(value)), by = .(date, origin)]
+
+reg_data[, treatment := (origin == "GBR") * (date > ymd("2020-12-31"))]
+
+# 162 zeros
+reg2 = feols(log(value) ~ treatment | date + origin, data = reg_data)
+fixest::etable(reg2)
+```
+```{r}
+
+reg3 = fepois(value ~ treatment | date + origin, data = reg_data)
+fixest::etable(reg3)
+```
+```{r}
+# gravity
+reg_data = data[hs == "TOTAL", -c("hs", "flow")]
+reg_data[, origin_date := str_c(origin, date)]
+reg_data[, destination_date := str_c(destination, date)]
+reg_data[, origin_destination := str_c(origin, destination)]
+
+reg_data[, treatment := (origin == "GBR") * (destination %in% EU27)* (date > ymd("2020-12-31"))]
+
+reg4 = feols(log(value) ~ treatment | origin_date + destination_date + origin_destination, data = reg_data)
+fixest::etable(reg4)
+```
+
+## Exercise
+
+1. Modify the plot to show exports of Ireland only.
+2. Try changing the date of treatment and see how the regression coefficients change.
+3. Add more EU countries to the comparison.
