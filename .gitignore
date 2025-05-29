@@ -2,3 +2,4 @@
 *.txt
 .DS_Store
 /08-event-data/temp
+08-time-as-data/temp/monthly_1921.csv.gz
