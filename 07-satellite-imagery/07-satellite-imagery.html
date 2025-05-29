@@ -485,7 +485,8 @@ st_crs(shape_ukraine)</code></pre>
 ##     ID[&quot;EPSG&quot;,4326]]</code></pre>
 <pre class="r"><code>all.equal(st_crs(shape_ukraine), st_crs(images_may22_median))  # usually returns FALSE</code></pre>
 <pre><code>## [1] &quot;Component \&quot;wkt\&quot;: 1 string mismatch&quot;</code></pre>
-<pre class="r"><code>shape_ukraine &lt;- st_transform(shape_ukraine, st_crs(images_may22_median))
+<pre class="r"><code># st_transform() reprojects the vector data shape_ukraine into the CRS of the raster images_may22_median. This step ensures that both datasets are in the same coordinate system, which is required for spatial operations like cropping, masking, or spatial joins.
+shape_ukraine &lt;- st_transform(shape_ukraine, st_crs(images_may22_median))
 all.equal(st_crs(shape_ukraine), st_crs(images_may22_median))  # should now match</code></pre>
 <pre><code>## [1] TRUE</code></pre>
 <pre class="r"><code># Crop and mask raster to Ukraine&#39;s borders

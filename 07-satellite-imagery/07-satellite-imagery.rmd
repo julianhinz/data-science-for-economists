@@ -38,7 +38,7 @@ plot(img)
 ```{r}
 # Load and plot nightlight image (A nightlight .tif file might look like a black-and-white image, but R reads it’s a 2D grid where each cell (pixel) has a numeric value representing light intensity.)
 img_nightlight <- rast("input/20210404_4x.tif")
-plot(img_nightlight)
+plot(log(img_nightlight))
 # Why you dont see anything? How would you get mote signal?
 ```
 
@@ -56,6 +56,7 @@ images_may22 <- rast(list_images_may22)
 images_may22_median <- median(images_may22)
 plot(log(images_may22_median))
 ```
+
 ```{r}
 images_may21 <- rast(list_images[str_detect(list_images, "202105")])
 images_may21_median <- median(images_may21)
@@ -117,6 +118,8 @@ plot(shape_ukraine)
 st_crs(shape_ukraine)
 st_crs(images_may22_median)
 all.equal(st_crs(shape_ukraine), st_crs(images_may22_median))  # usually returns FALSE
+
+# st_transform() reprojects the vector data shape_ukraine into the CRS of the raster images_may22_median. This step ensures that both datasets are in the same coordinate system, which is required for spatial operations like cropping, masking, or spatial joins. WGS84 stands for World Geodetic System 1984, and it is the standard global coordinate reference system (CRS)
 shape_ukraine <- st_transform(shape_ukraine, st_crs(images_may22_median))
 all.equal(st_crs(shape_ukraine), st_crs(images_may22_median))  # should now match
 
@@ -127,7 +130,7 @@ images_may22_median_ukraine <- crop(images_may22_median, shape_ukraine)
 plot(log(images_may22_median_ukraine))
 ```
 ```{r}
-images_may22_median_ukraine_masked <- mask(images_may22_median, shape_ukraine)
+images_may21_median_ukraine_masked <- mask(images_may22_median, shape_ukraine)
 plot(log(images_may22_median_ukraine_masked))
 ```
 

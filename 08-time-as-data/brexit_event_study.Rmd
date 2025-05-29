@@ -35,7 +35,7 @@ window <- d + days(-30:30)  # 61-day window centered around d
 head(window)
 window <- d + months(-2:3) 
 head(window)
-
+ ADD HERE THE COMMENT ON HOW TO MAP INTERVAL INTO SMALLER UNITS!
 interval(d1, d2)
 
 # zoo example: create a monthly time series
@@ -52,8 +52,8 @@ EU27 <- c("DEU", "AUT", "BEL", "DNK", "FIN", "FRA", "GRC", "IRL", "ITA", "LUX", 
 
 files <- list.files("input/monthly_hs2", full.names = TRUE)
 data <- fread(cmd = paste0("gunzip -c ", files[1]))
-View(data)
-head(data)
+# View(data)
+# head(data)
 ```
 ```{r}
 # Check the data
