@@ -1,0 +1,318 @@
+---
+title: "Estimating a Mincerian Wage Equation"
+author: "Irene Iodice"
+date: "May 2025"
+output: html_document
+---
+
+
+## Learning Objectives
+
+In this exercise, we will:
+1. Explore the Wage dataset.
+2. Fit a best subset model and evaluate model complexity.
+3. Introduce polynomial terms and refit.
+4. Use ridge and lasso for regularization.
+5. Compare models using test-set validation.
+---
+
+```{r setup, message=FALSE, warning=FALSE, include=FALSE}
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman"); pacman::p_load(ISLR2, leaps, glmnet, boot, tidyverse, data.table, splines)
+```
+
+## 2  Data Inspect
+```{r}
+data(Wage)
+glimpse(Wage)
+# missing?
+colSums(is.na(Wage))
+```
+
+## 3 Best-subset selection (using only training data)
+```{r}
+# Fit best subset selection on all predictors (excluding raw wage), allowing up to 24 variables
+regfit.full <- regsubsets(logwage ~ ., data = select(Wage, -wage), nvmax = ncol(Wage) - 1)
+# Check how many levels each factor variable has (to identify potential single-level or unused levels)
+sapply(Wage, function(x) if (is.factor(x)) nlevels(x) else NA)
+# Drop unused factor levels (e.g. from removed observations or filtering)
+Wage <- droplevels(Wage)
+# Re-check factor levels after cleaning
+sapply(Wage, function(x) if (is.factor(x)) nlevels(x) else NA)
+# Remove 'region' because it has only one level (i.e. provides no variation)
+Wage <- select(Wage, -region)
+```
+
+
+```{r}
+# Fit best subset selection using all predictors (excluding the intercept and raw wage)
+# logwage is the outcome variable; we remove `wage` to avoid redundancy
+regfit.full <- regsubsets(logwage ~ . - 1, data = select(Wage, -wage), nvmax = ncol(Wage) - 1)
+
+# Summarize the model fits: RSS, Adjusted R², Cp, and BIC for each model size
+reg.sum <- summary(regfit.full)
+
+# Plot BIC values for models with 1 to 24 variables
+# Highlight the model with the lowest BIC in red
+plot(reg.sum$bic, type = "b", xlab = "Number of Variables", ylab = "BIC",
+     main = "Model Selection Using BIC")
+best.bic <- which.min(reg.sum$bic)
+points(best.bic, reg.sum$bic[best.bic], col = 2, pch = 19, cex = 1.6)  # red dot
+
+# Display other model selection criteria for visual comparison
+par(mfrow = c(2, 2))  # arrange plots in a 2x2 grid
+
+# Plot Residual Sum of Squares (RSS) — always decreases as model size increases
+plot(reg.sum$rss, type = "l", xlab = "p", ylab = "RSS")
+# Plot Adjusted R² — adjusts for number of predictors; typically plateaus
+plot(reg.sum$adjr2, type = "l", xlab = "p", ylab = "Adj R²")
+# Plot Mallows’ Cp — an estimate of test error; lower is better
+plot(reg.sum$cp, type = "l", xlab = "p", ylab = "Cₚ")
+# Plot BIC — Bayesian Information Criterion; penalizes complexity more heavily
+plot(reg.sum$bic, type = "l", xlab = "p", ylab = "BIC")
+
+```
+Interpretation (can be included in text):
+ - RSS: Residual Sum of Squares — always decreases with p
+ - Adj R²: Adjusted R² (penalized for p) — plateaus around p = 9
+ - Cₚ: Mallows’ Cp (estimate of test error) — minimizes around p = 9
+ - BIC: Bayesian Information Criterion — lowest at p = 9
+
+```{r}
+# Extract the coefficients of the best model according to BIC
+# This returns the selected variables and their estimated coefficients
+coef(regfit.full, best.bic)
+```
+
+```{r}
+# Plot log(wage) against age with a fitted natural spline regression (df = 2)
+# - Points represent individual observations (semi-transparent for readability)
+# - The blue curve shows a smooth fit using natural splines with 2 degrees of freedom
+ggplot(Wage, aes(x = age, y = logwage)) +
+  geom_point(alpha = 0.3)  +
+  geom_smooth(method = "lm", formula = y ~ ns(x, df = 2), se = FALSE, color = "blue")
+```
+
+```{r}
+# Fit best subset selection model including a quadratic term for age: I(age^2)
+# Exclude raw wage (to avoid multicollinearity with logwage)
+regfit.age2 <- regsubsets(logwage ~ . - wage + I(age^2), data = Wage,nvmax = ncol(Wage) - 1)
+
+regfit.age2.sum <- summary(regfit.age2)
+
+# Plot BIC for all models and highlight the best (lowest BIC) model in red
+plot(regfit.age2.sum$bic, type = "b", xlab = "Number of Variables", ylab = "BIC",
+     main = "Model Selection Using BIC")
+best.bic <- which.min(regfit.age2.sum$bic)
+points(best.bic, regfit.age2.sum$bic[best.bic], col = 2, pch = 19, cex = 1.6)
+
+# Visualize other model selection criteria to compare fits across model sizes
+par(mfrow = c(2, 2))  # arrange plots in 2x2 grid
+plot(regfit.age2.sum$rss,    type = "l", xlab = "p", ylab = "RSS")       # Residual Sum of Squares
+plot(regfit.age2.sum$adjr2,  type = "l", xlab = "p", ylab = "Adj R²")    # Adjusted R-squared
+plot(regfit.age2.sum$cp,     type = "l", xlab = "p", ylab = "Cₚ")        # Mallows' Cp
+plot(regfit.age2.sum$bic,    type = "l", xlab = "p", ylab = "BIC")     
+
+```
+
+```{r}
+# Extract the coefficients of the best model according to BIC
+# This returns the selected variables and their estimated coefficients
+coef(regfit.age2, best.bic)
+```
+
+## 5 Variable Selection using CV
+
+```{r}
+# Set seed for reproducibility
+set.seed(1)
+
+# Identify best model size according to BIC (from regfit.age2)
+best.bic <- which.min(regfit.age2.sum$bic)
+best.coef <- coef(regfit.age2, id = best.bic)
+Xvars <- names(best.coef)[-1]  # remove intercept
+
+# Create model formula using selected variable names
+formula_best <- as.formula(
+  paste("logwage ~", paste(sprintf("`%s`", Xvars), collapse = " + "))
+)
+
+# Split data into 50% train and 50% test
+train_id <- sample(nrow(Wage), nrow(Wage) / 2)
+test_id  <- setdiff(seq_len(nrow(Wage)), train_id)
+```
+
+```{r}
+library(purrr)
+
+val_err <- map_dbl(1:best.bic, function(p) {
+  coefs_p <- coef(regfit.age2, id = p)
+  coef_names <- names(coefs_p)
+
+  # Build a general formula with all original variables
+  formula_p <- as.formula("logwage ~ . + I(age^2)")
+
+  # Create model matrix for test set
+  X_test <- model.matrix(formula_p, data = Wage[test_id, ]) 
+  # model.matrix() do the dummy-variable expansion.
+
+  # Match variables used in model
+  preds <- X_test[, coef_names, drop = FALSE] %*% coefs_p
+
+  mean((Wage$logwage[test_id] - preds)^2)
+})
+```
+
+```{r}
+
+# Optional: plot validation error
+plot(1:best.bic, val_err, type = "b", pch = 19,
+     xlab = "Model Size", ylab = "Test MSE",
+     main = "Validation Error vs Model Size")
+best_size <- which.min(val_err)
+points(best_size, val_err[best_size], col = "red", pch = 19, cex = 1.5)
+```
+## 6 Shrinkage: Ridge vs Lasso
+
+```{r}
+library(glmnet)
+
+# Remove rows with missing values
+wage_data <- na.omit(Wage)
+
+# x matrix: predictors (excluding the intercept)
+x <- model.matrix(logwage ~ . + I(age^2), data = select(wage_data, -wage))[, -1]
+
+# y vector: outcome
+y <- wage_data$logwage
+
+#  logarithmically spaced grid of 100 values between 10^10 and 10^-2 (standard)
+grid <- 10^seq(10, -2, length = 100)
+```
+
+
+```{r}
+ridge.mod <- glmnet(x, y, alpha = 0, lambda = grid)
+
+# Cross-validation to pick best lambda
+set.seed(1)
+cv.ridge <- cv.glmnet(x, y, alpha = 0)
+plot(cv.ridge)
+
+best_lambda_ridge <- cv.ridge$lambda.min
+```
+```{r}
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+
+# Cross-validation to pick best lambda
+set.seed(1)
+cv.lasso <- cv.glmnet(x, y, alpha = 1)
+plot(cv.lasso)
+
+best_lambda_lasso <- cv.lasso$lambda.min
+```
+
+```{r}
+# Coefficients
+lasso.coef <- predict(lasso.mod, s = best_lambda_lasso, type = "coefficients")
+ridge.coef <- predict(ridge.mod, s = best_lambda_ridge, type = "coefficients")
+
+# Lasso: sparse
+lasso_nonzero <- sum(lasso.coef != 0)
+# Ridge: usually all are non-zero
+ridge_nonzero <- sum(ridge.coef != 0)
+
+lasso_nonzero
+ridge_nonzero
+cv.lasso$cvm[cv.lasso$lambda == best_lambda_lasso]  # Lasso test MSE
+cv.ridge$cvm[cv.ridge$lambda == best_lambda_ridge]  # Ridge test MSE
+```
+```{r}
+ridge_df <- as.matrix(ridge.coef)
+lasso_df <- as.matrix(lasso.coef)
+
+coef_comparison <- data.frame(
+  Variable = rownames(ridge_df),
+  Ridge = round(ridge_df[, 1], 4),
+  Lasso = round(lasso_df[, 1], 4)
+)
+
+# Remove the intercept row
+coef_plot_df <- coef_comparison %>%
+  filter(Variable != "(Intercept)") %>%
+  pivot_longer(cols = c("Ridge", "Lasso"), names_to = "Method", values_to = "Coefficient")
+
+# Plot coefficient values for each method by variable
+ggplot(coef_plot_df, aes(x = Coefficient, y = reorder(Variable, Coefficient), fill = Method)) +
+  geom_col(position = "dodge") +
+  labs(title = "Ridge vs Lasso Coefficients by Variable",
+       x = "Coefficient Value",
+       y = "Variable") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Ridge" = "steelblue", "Lasso" = "tomato")) +
+  theme(legend.position = "top")
+
+
+```
+## 7 K FOLD CV: compare subset selection, Ridge and Lasso
+```{r}
+# Define RMSE function
+rmse <- function(pred, truth) sqrt(mean((pred - truth)^2))
+
+# Create 10-fold CV splits
+set.seed(123)
+folds <- sample(rep(1:10, length = nrow(wage_data)))
+
+# Initialize vectors
+cv_errors <- data.frame(subset = rep(NA, 10),
+                        ridge = rep(NA, 10),
+                        lasso = rep(NA, 10))
+
+for (k in 1:10) {
+  train_idx <- which(folds != k)
+  test_idx  <- which(folds == k)
+  
+  # Split data
+  train_data <- wage_data[train_idx, ]
+  test_data  <- wage_data[test_idx, ]
+  
+  # ----- Subset selection -----
+  regfit_k <- regsubsets(logwage ~ . + I(age^2), data = train_data, nvmax = ncol(Wage) - 1)
+  regfit_k_sum <- summary(regfit_k)
+  best_k <- which.min(regfit_k_sum$bic)
+  coefs_k <- coef(regfit_k, id = best_k)
+  X_test <- model.matrix(logwage ~ . + I(age^2), data = test_data)[, names(coefs_k), drop = FALSE]
+  cv_errors$subset[k] <- rmse(X_test %*% coefs_k, test_data$logwage)
+  
+  # Shrinkage
+  x_train <- model.matrix(logwage ~ . + I(age^2), train_data)[, -1]
+  y_train <- train_data$logwage
+  x_test  <- model.matrix(logwage ~ . + I(age^2), test_data)[, -1]
+  y_test  <- test_data$logwage
+  
+  # ----- Ridge -----
+  ridge_k <- cv.glmnet(x_train, y_train, alpha = 0)
+  pred_ridge <- predict(ridge_k, s = ridge_k$lambda.min, newx = x_test)
+  cv_errors$ridge[k] <- rmse(pred_ridge, y_test)
+  
+  # ----- Lasso -----
+  lasso_k <- cv.glmnet(x_train, y_train, alpha = 1)
+  pred_lasso <- predict(lasso_k, s = lasso_k$lambda.min, newx = x_test)
+  cv_errors$lasso[k] <- rmse(pred_lasso, y_test)
+}
+```
+
+
+```{r}
+colMeans(cv_errors)
+
+# Visualize CV errors
+cv_errors_long <- pivot_longer(cv_errors, everything(), names_to = "Model", values_to = "RMSE")
+
+ggplot(cv_errors_long, aes(x = Model, y = RMSE)) +
+  geom_boxplot(fill = "lightblue") +
+  theme_minimal() +
+  labs(title = "10-Fold CV: RMSE Comparison", y = "Root Mean Squared Error")
+
+```
+
+ 
