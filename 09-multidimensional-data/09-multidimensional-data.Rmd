@@ -13,7 +13,7 @@ In this exercise, we will:
 2. Fit a best subset model and evaluate model complexity.
 3. Introduce polynomial terms and refit.
 4. Use ridge and lasso for regularization.
-5. Compare models using test-set validation.
+5. Compare models using test-set and CV validation.
 ---
 
 ```{r setup, message=FALSE, warning=FALSE, include=FALSE}
@@ -24,8 +24,6 @@ if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman"); pac
 ```{r}
 data(Wage)
 glimpse(Wage)
-# missing?
-colSums(is.na(Wage))
 ```
 
 ## 3 Best-subset selection (using only training data)
@@ -44,9 +42,11 @@ Wage <- select(Wage, -region)
 
 
 ```{r}
-# Fit best subset selection using all predictors (excluding the intercept and raw wage)
+# Fit best subset selection using all predictors (excluding the intercept and raw wage): What regsubsets() is doing: It searches over all combinations of predictors up to size 24 and identifies the best-performing subset of each size.You can later extract and compare model performance using: summary(regfit.full)
+
 # logwage is the outcome variable; we remove `wage` to avoid redundancy
-regfit.full <- regsubsets(logwage ~ . - 1, data = select(Wage, -wage), nvmax = ncol(Wage) - 1)
+# X <- model.matrix(logwage ~ . - 1, data = select(Wage, -wage))
+regfit.full <- regsubsets(logwage ~ . - 1, data = select(Wage, -wage), nvmax = 24)
 
 # Summarize the model fits: RSS, Adjusted R², Cp, and BIC for each model size
 reg.sum <- summary(regfit.full)
@@ -65,8 +65,6 @@ par(mfrow = c(2, 2))  # arrange plots in a 2x2 grid
 plot(reg.sum$rss, type = "l", xlab = "p", ylab = "RSS")
 # Plot Adjusted R² — adjusts for number of predictors; typically plateaus
 plot(reg.sum$adjr2, type = "l", xlab = "p", ylab = "Adj R²")
-# Plot Mallows’ Cp — an estimate of test error; lower is better
-plot(reg.sum$cp, type = "l", xlab = "p", ylab = "Cₚ")
 # Plot BIC — Bayesian Information Criterion; penalizes complexity more heavily
 plot(reg.sum$bic, type = "l", xlab = "p", ylab = "BIC")
 
@@ -95,7 +93,7 @@ ggplot(Wage, aes(x = age, y = logwage)) +
 ```{r}
 # Fit best subset selection model including a quadratic term for age: I(age^2)
 # Exclude raw wage (to avoid multicollinearity with logwage)
-regfit.age2 <- regsubsets(logwage ~ . - wage + I(age^2), data = Wage,nvmax = ncol(Wage) - 1)
+regfit.age2 <- regsubsets(logwage ~ . - wage + I(age^2), data = Wage,nvmax = 24)
 
 regfit.age2.sum <- summary(regfit.age2)
 
@@ -174,7 +172,7 @@ points(best_size, val_err[best_size], col = "red", pch = 19, cex = 1.5)
 ## 6 Shrinkage: Ridge vs Lasso
 
 ```{r}
-library(glmnet)
+
 
 # Remove rows with missing values
 wage_data <- na.omit(Wage)
